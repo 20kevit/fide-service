@@ -1,0 +1,18 @@
+# FIDE Service — ignore runtime/secrets/generated artifacts
+.env
+*.env
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite
+*.log
+*.zip
+instance/
+data/
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+Thumbs.db
