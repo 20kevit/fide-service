@@ -1,0 +1,6 @@
+<playerslist>
+<player><fideid>12512294</fideid><name>Alpha, Test One</name><country>IRI</country><sex>M</sex><title>GM</title><rating>2612</rating><games>9</games><k>10</k><rapid_rating>2550</rapid_rating><rapid_games>5</rapid_games><rapid_k>20</rapid_k><blitz_rating>2501</blitz_rating><blitz_games>7</blitz_games><blitz_k>20</blitz_k><birthday>1999</birthday></player>
+<player><fideid>12512295</fideid><name>Beta, Test Two</name><country>IRI</country><sex>F</sex><w_title>WIM</w_title><rating>2200</rating><games>12</games><k>20</k><birthday>2005</birthday></player>
+<player><fideid>99900001</fideid><name>Gamma, Foreign Player</name><country>GER</country><sex>M</sex><title>IM</title><rating>2450</rating><games>4</games><k>20</k><birthday>1990</birthday></player>
+<player><fideid>12512296</fideid><name>Delta, Inactive One</name><country>IRI</country><sex>M</sex><rating>2100</rating><games>0</games><k>40</k><flag>inactive</flag></player>
+</playerslist>

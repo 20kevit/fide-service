@@ -1,0 +1,5 @@
+<playerslist>
+<player><fideid>12512294</fideid><name>Alpha, Test One</name><country>IRI</country><sex>M</sex><title>GM</title><rating>2560</rating><games>6</games><k>20</k><birthday>1999</birthday></player>
+<player><fideid>12512295</fideid><name>Beta, Test Two</name><country>IRI</country><sex>F</sex><w_title>WIM</w_title><rating>2210</rating><games>3</games><k>20</k><birthday>2005</birthday></player>
+<player><fideid>99900001</fideid><name>Gamma, Foreign Player</name><country>GER</country><sex>M</sex><title>IM</title><rating>2460</rating><games>2</games><k>20</k><birthday>1990</birthday></player>
+</playerslist>
