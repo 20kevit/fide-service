@@ -6,6 +6,7 @@ service exposes a JSON API (no admin HTML UI). Every failure converts to
 a classified FideError with a stage key, a safe detail string (never
 secrets), and a suggested operator action.
 """
+import re
 
 
 class FideErrorCategory:
@@ -151,6 +152,15 @@ class FideError(Exception):
         }
 
 
+_HTTP_CODE_RE = re.compile(r"\b[45]\d{2}\b")
+
+
+def _has_http_code(blob: str) -> bool:
+    """True for standalone 4xx/5xx codes. Word boundaries keep MySQL
+    error numbers like 1406 (or 2003) from matching as HTTP statuses."""
+    return bool(_HTTP_CODE_RE.search(blob))
+
+
 def classify_exception(exc):
     """Best-effort mapping of arbitrary exceptions to a category."""
     name = type(exc).__name__.lower()
@@ -169,7 +179,15 @@ def classify_exception(exc):
         return FideErrorCategory.NETWORK_CONNECTION_ERROR
     if any(k in blob for k in ("429", "rate limit", "too many requests")):
         return FideErrorCategory.HTTP_RATE_LIMIT
-    if any(k in blob for k in ("http", "status", "40", "50")):
+    # Database failures first: driver/ORM markers ("1406" alone must NOT
+    # match the HTTP branch below — it is a MySQL error number, not a
+    # status code).
+    if any(k in blob for k in ("sqlalchemy", "pymysql", "mysqldb",
+                               "integrityerror", "dataerror",
+                               "operationalerror", "programmingerror",
+                               "internalerror", "database is locked")):
+        return FideErrorCategory.DATABASE_ERROR
+    if "http" in blob or "status" in blob or _has_http_code(blob):
         return FideErrorCategory.HTTP_ERROR
     if any(k in blob for k in ("not well-formed", "mismatched tag", "no element found",
                                "parseerror", "xml")):

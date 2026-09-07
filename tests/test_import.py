@@ -195,3 +195,43 @@ class TestHistoryScope:
         assert ("2026-09", "standard") in iri
         # Identity is global: all four players present.
         assert FidePlayerRepository.count() == 4
+
+
+LONG_TEXT_XML = (
+    "<playerslist>"
+    "<player><fideid>55500001</fideid>"
+    "<name>Very Long Official Name With Many Components, First Middle</name>"
+    "<country>EGY</country><sex>M</sex>"
+    "<o_title>SI,NI,FI,LSI,FA</o_title>"
+    "<rating>2300</rating><games>10</games><k>20</k>"
+    "<birthday>1979</birthday></player>"
+    "</playerslist>"
+)
+
+
+class TestOfficialTextWidths:
+    def test_long_otitle_and_name_import_verbatim(self, app):
+        # Regression: official otitle lists (e.g. 'SI,NI,FI,LSI,FA')
+        # exceeded String(10) and aborted a real import on MySQL.
+        from application.import_service import JobRunnerConfig
+        settings = app.config["FIDE_SETTINGS"]
+
+        def fake_download(url, dest, **kw):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with zipfile.ZipFile(dest, "w") as zf:
+                zf.writestr("players_list.xml", LONG_TEXT_XML)
+            return os.path.getsize(dest)
+
+        cfg = JobRunnerConfig(
+            data_dir=settings.data_directory, base_url="http://localhost/",
+            worker_timeout_seconds=600, batch_size=2,
+            history_federations=["IRI"],
+            download_fn=fake_download,
+            verify_url_fn=lambda u: {"ok": True, "status": 200,
+                                     "detail": "OK"})
+        import_service.ensure_period_jobs("2026-09")
+        result = import_service.tick("2026-09", cfg)
+        assert result["status"] == "success", result
+        player = FidePlayerRepository.get_by_fide_id("55500001")
+        assert player.otitle == "SI,NI,FI,LSI,FA"
+        assert player.name.startswith("Very Long Official Name")

@@ -93,3 +93,31 @@ class TestJobTransitions:
         assert not can_transition("failed", "completed")
         assert not can_transition("downloading", "importing")
         assert not can_transition("pending", "failed")  # via fail path only
+
+
+class TestErrorClassification:
+    def test_database_errors(self):
+        from sqlalchemy.exc import DataError, IntegrityError
+        from domain.errors import FideErrorCategory, classify_exception
+        db_err = DataError("INSERT ...", {},
+                           Exception('(1406, "Data too long")'))
+        assert classify_exception(db_err) == \
+            FideErrorCategory.DATABASE_ERROR
+        assert classify_exception(IntegrityError(
+            "INSERT ...", {}, Exception("duplicate"))) == \
+            FideErrorCategory.DATABASE_ERROR
+
+    def test_mysql_error_number_is_not_http(self):
+        # Regression: naive "40"/"50" substring matching once labeled
+        # MySQL error 1406 as HTTP_ERROR during a real import.
+        from domain.errors import FideErrorCategory, classify_exception
+        assert classify_exception(Exception(
+            '(1406, "Data too long for column")')) != \
+            FideErrorCategory.HTTP_ERROR
+
+    def test_http_codes_still_match(self):
+        from domain.errors import FideErrorCategory, classify_exception
+        assert classify_exception(Exception("HTTP 503 unavailable")) == \
+            FideErrorCategory.HTTP_ERROR
+        assert classify_exception(Exception("429 too many requests")) == \
+            FideErrorCategory.HTTP_RATE_LIMIT

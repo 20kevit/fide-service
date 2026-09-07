@@ -13,6 +13,14 @@ from tests.conftest import seed_player, seed_rating
 
 
 class TestPlayerRepository:
+    def test_text_column_widths_fit_official_data(self):
+        # Contract: official otitle lists and long names must never be
+        # truncated (a real import aborted on String(10) under MySQL).
+        cols = FidePlayerModel.__table__.c
+        assert cols["name"].type.length >= 255
+        for col in ("title", "wtitle", "otitle", "foatitle"):
+            assert cols[col].type.length >= 64, col
+
     def test_pk_uniqueness(self, app):
         seed_player("1", name="A")
         db.session.commit()

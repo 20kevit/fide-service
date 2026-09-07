@@ -8,6 +8,10 @@ Tables (exactly three — no legacy mirrors):
 Design notes vs Swiss:
 - birth_year is String(16): the official <birthday> text is preserved
   verbatim instead of being squeezed into String(4).
+- Titles are String(64): official otitle/foatitle values can be
+  comma-separated lists (e.g. arbiter title sets observed in the wild),
+  far beyond the old String(10). Never truncate official data.
+- name is String(255) for long official names.
 - fide_ratings carries an extra composite lookup index
   (fide_id, rating_type, period) so latest-per-type reads are served by
   the database, never resolved in Python over full histories.
@@ -24,13 +28,13 @@ class FidePlayerModel(db.Model):
     __tablename__ = "fide_players"
 
     fide_id = db.Column(db.String(20), primary_key=True)
-    name = db.Column(db.String(200), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
     sex = db.Column(db.String(1), default="M")
     federation = db.Column(db.String(5), default="", index=True)
-    title = db.Column(db.String(10), default="")
-    wtitle = db.Column(db.String(10), default="")
-    otitle = db.Column(db.String(10), default="")
-    foatitle = db.Column(db.String(10), default="")
+    title = db.Column(db.String(64), default="")
+    wtitle = db.Column(db.String(64), default="")
+    otitle = db.Column(db.String(64), default="")
+    foatitle = db.Column(db.String(64), default="")
     birth_year = db.Column(db.String(16), default="")
     inactive = db.Column(db.Boolean, default=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow,

@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 #: an applied migration — add a new one.
 MIGRATIONS: List[Tuple[str, str]] = [
     ("0001_initial", "migrations.versions.v0001_initial"),
+    ("0002_widen_text_columns", "migrations.versions.v0002_widen_text_columns"),
 ]
 
 
