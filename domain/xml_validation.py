@@ -173,11 +173,12 @@ def validate_stream(stream_factory: Callable[[], BinaryIO],
                     max_bytes: Optional[int] = None) -> FideValidationResult:
     """Validate XML read through a stream factory (e.g. a ZIP member).
 
-    Each ``stream_factory()`` call must return a FRESH binary stream at
+    Each     ``stream_factory()`` call must return a FRESH binary stream at
     the start (two sequential passes: head pre-scan, then structure
     scan). Every stream is closed by the validator.
     """
-    _check_size(size_bytes, display_name, max_bytes)
+    if size_bytes:
+        _check_size(size_bytes, display_name, max_bytes)
     _check_head(_read_head(stream_factory))
     stream = stream_factory()
     try:

@@ -165,7 +165,7 @@ def tick(period: str, cfg: JobRunnerConfig,
 def _heartbeat(job: FideImportJobModel, state: Optional[str] = None,
                processed: Optional[int] = None,
                total: Optional[int] = None) -> None:
-    if state is not None:
+    if state is not None and state != job.state:
         _transition(job, state)
     job.heartbeat_at = datetime.utcnow()
     if processed is not None:
@@ -179,6 +179,10 @@ def _heartbeat(job: FideImportJobModel, state: Optional[str] = None,
 def _fail_job(job: FideImportJobModel, exc: Exception) -> Dict[str, Any]:
     try:
         db.session.rollback()
+    except Exception:
+        pass
+    try:
+        job = db.session.merge(job)  # may have been expunged mid-batch
     except Exception:
         pass
     if isinstance(exc, FideError):
@@ -282,9 +286,11 @@ def run_claimed_job(job: FideImportJobModel,
                 if processed % cfg.batch_size == 0:
                     _heartbeat(job, processed=processed)
                     db.session.expunge_all()  # bounded memory
+                    job = db.session.merge(job)  # re-attach (expunged too)
             db.session.commit()
             _heartbeat(job, processed=processed)
             db.session.expunge_all()
+            job = db.session.merge(job)
         finally:
             try:
                 stream.close()

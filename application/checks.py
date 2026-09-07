@@ -38,7 +38,7 @@ def verify_data(period: str = "") -> Dict:
     if period:
         dup_q = dup_q.where(FideRatingModel.period == period)
     duplicates = [{"fide_id": r[0], "period": r[1], "rating_type": r[2],
-                   "count": r[3]} for r in db.session.execute(dup_q).all()}
+                   "count": r[3]} for r in db.session.execute(dup_q).all()]
 
     empty_ids = (db.session.execute(
         select(func.count()).select_from(FidePlayerModel)
