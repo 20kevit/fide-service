@@ -244,7 +244,17 @@ class TestAdmin:
         assert resp.status_code == 400  # pending, not failed
 
     def test_read_key_rejected_on_admin(self, client, auth_headers):
+        # Authenticated but not authorized -> 403, not 401.
         resp = client.get("/api/v1/admin/jobs", headers=auth_headers)
+        assert resp.status_code == 403
+        assert resp.get_json()["error"]["code"] == "FORBIDDEN"
+
+    def test_admin_key_accepted(self, client, admin_headers):
+        resp = client.get("/api/v1/admin/jobs", headers=admin_headers)
+        assert resp.status_code == 200
+
+    def test_no_credential_401(self, client):
+        resp = client.get("/api/v1/admin/jobs")
         assert resp.status_code == 401
 
     def test_verify_endpoint(self, client, seeded, admin_headers):

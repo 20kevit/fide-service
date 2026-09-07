@@ -18,8 +18,11 @@ from flask import current_app, g, request
 from interfaces.api.errors import ApiError
 
 #: key -> [monotonic timestamps of recent requests] (process-local).
+#: Bounded (see _check_rate_limit): stale keys are purged so memory
+#: cannot grow without bound regardless of key cardinality.
 _request_log: Dict[str, List[float]] = {}
 _WINDOW_SECONDS = 60.0
+_MAX_TRACKED_KEYS = 5000
 
 
 def _settings():
@@ -49,6 +52,13 @@ def _check_rate_limit(key: str) -> None:
                        headers={"Retry-After": str(retry_after)})
     hits.append(now)
     _request_log[key] = hits
+    if len(_request_log) > _MAX_TRACKED_KEYS:
+        # Opportunistic purge: drop keys with no fresh hits. Runs at
+        # most once per _MAX_TRACKED_KEYS inserts (amortized cheap).
+        stale = [k for k, ts in _request_log.items()
+                 if not ts or now - ts[-1] >= _WINDOW_SECONDS]
+        for k in stale:
+            del _request_log[k]
 
 
 def reset_rate_limits() -> None:
@@ -82,7 +92,12 @@ def require_api_key(view):
 
 
 def require_admin_key(view):
-    """Protect an admin endpoint with the admin credential."""
+    """Protect an admin endpoint with the admin credential.
+
+    A valid READ key presented here is authenticated but not authorized
+    -> 403 FORBIDDEN (not 401): the caller is known, the scope is not.
+    Missing/invalid credentials -> 401. Unconfigured service -> 503.
+    """
 
     @wraps(view)
     def wrapper(*args, **kwargs):
@@ -91,11 +106,14 @@ def require_admin_key(view):
         if not expected:
             raise ApiError("SERVICE_UNAVAILABLE",
                            "Service is not configured to serve requests.")
-        if not _valid(_presented_admin_key(), expected):
-            raise ApiError("UNAUTHORIZED",
-                           "Missing or invalid admin credential.")
-        _check_rate_limit("admin:" + expected)
-        g.auth_scope = "admin"
-        return view(*args, **kwargs)
+        if _valid(_presented_admin_key(), expected):
+            _check_rate_limit("admin:" + expected)
+            g.auth_scope = "admin"
+            return view(*args, **kwargs)
+        if _valid(_presented_read_key(), settings.api_key):
+            raise ApiError("FORBIDDEN",
+                           "Admin credential required for this endpoint.")
+        raise ApiError("UNAUTHORIZED",
+                       "Missing or invalid admin credential.")
 
     return wrapper
