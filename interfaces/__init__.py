@@ -1,0 +1,1 @@
+"""FIDE interfaces package."""

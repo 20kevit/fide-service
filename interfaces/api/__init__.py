@@ -1,0 +1,1 @@
+"""FIDE REST API package."""
