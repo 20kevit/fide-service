@@ -12,6 +12,8 @@ __pycache__/
 *.zip
 instance/
 data/
+var/
+fide.db
 .pytest_cache/
 .mypy_cache/
 .DS_Store

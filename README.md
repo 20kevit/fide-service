@@ -1,94 +1,96 @@
-# FIDE Service — Architecture / Documentation Workspace
+# FIDE Service — Independent Bounded Context (Phase 1, local)
 
-> Status (Phase 0): **documentation only — no implementation yet.**
-> This repository will become the independent FIDE Service. It is currently
-> an architecture and extraction-planning workspace for the future Flask
-> application. Do not treat these docs as the implementation.
+> Status: **runnable independent Flask service (local development).**
+> Phase 0 architecture docs live in `docs/01–12 + FIDE_EXTRACTION_ARCHITECTURE.md`;
+> Phase 1 build decisions are recorded in `docs/13-phase1-decisions.md`.
+> No deployment, no cutover, no Swiss changes — local only.
 
 ## Repository relationship
 
 ```text
 G:\Programming\Web\
-├── swiss_app_dev\      ← Swiss Manager (independent Git repository)
+├── swiss_app_dev\      ← Swiss Manager (independent Git repository, untouched)
 └── fide_service\       ← FIDE Service (THIS repository, independent Git history)
 ```
 
-* `swiss_app_dev` and `fide_service` are **two separate Git repositories**
-  with completely separate histories.
-* `fide_service` is **NOT** a subdirectory, submodule, or subtree of
-  `swiss_app_dev`, and is not managed by it.
-* Phase 0 made **zero** changes to `swiss_app_dev`. All work in this repo
-  is new documentation scaffolding.
+This service never imports Swiss Manager code, models, database, or
+files — and Swiss Manager does not import this service (verified by grep;
+see `docs/13-phase1-decisions.md`).
 
-## Target direction
+## Quick start (local only)
 
-```text
-Swiss Manager
-      │
-      │ HTTPS REST API (service-to-service API key, fail closed)
-      ▼
-FIDE Service (own Flask app, own DB, own venv, own config,
-              own migrations, own storage, own workers/Cron,
-              own deployment, own tests)
+```powershell
+python -m venv venv
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env   # then set FIDE_API_KEY (required to serve)
+.\venv\Scripts\python.exe -m flask --app run.py db-upgrade
+.\venv\Scripts\python.exe -m flask --app run.py fide-ensure-jobs --period 2026-09
+.\venv\Scripts\python.exe -m flask --app run.py fide-worker --period 2026-09
+.\venv\Scripts\python.exe run.py   # serves API on 127.0.0.1:5001
+.\venv\Scripts\python.exe -m pytest tests -q
 ```
 
-Core invariant: **FIDE = current FIDE data; Swiss = tournament snapshot.**
-Tournament operations must keep working when the FIDE Service is
-unavailable, using local snapshots and graceful degradation
-(see `docs/03-data-ownership.md` and `docs/08-failure-and-resilience.md`).
+Authenticated example (headers, never URLs/bodies for secrets):
 
-## What is in this repo right now
-
-```text
-fide_service/
-├── README.md                        ← this file
-└── docs/
-    ├── 01-current-state.md          ← existing FIDE inside Swiss Manager
-    ├── 02-dependency-map.md         ← every Swiss → FIDE consumer
-    ├── 03-data-ownership.md         ← FIDE-owned vs Swiss-owned fields
-    ├── 04-database.md               ← FIDE tables, constraints, migrations
-    ├── 05-api-contract.md           ← REST API v1 draft
-    ├── 06-swiss-client-contract.md  ← interface Swiss must depend on
-    ├── 07-import-architecture.md    ← legacy vs job-based import pipeline
-    ├── 08-failure-and-resilience.md ← failure matrix
-    ├── 09-deployment.md             ← independent deployment design
-    ├── 10-testing-strategy.md       ← test plan + coupling inventory
-    ├── 11-extraction-plan.md        ← migration strategy
-    ├── 12-open-decisions.md         ← DECIDED / RECOMMENDED / UNKNOWN / BLOCKER
-    └── FIDE_EXTRACTION_ARCHITECTURE.md ← executive reference for coding agents
+```powershell
+$h = @{"X-API-Key" = $env:FIDE_API_KEY}
+Invoke-RestMethod http://127.0.0.1:5001/api/v1/players/12512294 -Headers $h
 ```
 
-## Phase discipline
-
-* **Phase 0 (this phase):** architecture + documentation only. No feature
-  implementation, no Swiss code changes, no migrations run, no production
-  changes, no legacy deletion.
-* **Known Swiss-side issue (documented, NOT fixed here):**
-  `templates/tournament/player_edit.html` exposes neither `fide_id` nor
-  `k_factor`, while `ParticipantManagement.update` reads both from the form
-  (missing key → wipe/reset). See `docs/01-current-state.md` §12 and
-  `docs/12-open-decisions.md`. It must be addressed during extraction
-  planning, not silently forgotten.
-* **Do not begin Phase 1 implementation** after reading these docs unless
-  explicitly instructed. The extraction plan (`docs/11-extraction-plan.md`)
-  is the entry point when implementation is authorized.
-
-## Evidence convention used in these docs
-
-Every important conclusion cites concrete repository evidence as
-`path[:line]` relative to `swiss_app_dev` (e.g.
-`infrastructure/models/fide.py:13`, `config.py:59`). Three labels are used:
+## Layout (Clean Architecture / DDD)
 
 ```text
-CURRENT BEHAVIOR     — what the code does today (verified by reading it)
-INTENDED BEHAVIOR    — what the approved domain decisions require
-RECOMMENDED FUTURE   — what the FIDE Service should do (explicit proposal)
+interfaces/      Flask factory, REST API v1, CLI worker  → depends on application
+application/     orchestration + transactions (no Flask) → depends on domain
+domain/          pure Python (parser, validation, titles, errors)
+infrastructure/  SQLAlchemy models, flush-only repos, ZIP storage,
+                 downloader, owned migration runner      → implements persistence
+migrations/      owned versioned history (0001_initial)
+tests/           domain, parser, repository, API, import, security suites
+docs/            Phase 0 architecture + Phase 1 decisions
+config.py        env-driven settings (secrets never defaulted)
+run.py / wsgi.py local runner / future Passenger entry (inert for now)
 ```
 
-## Source of truth
+Dependency direction: `interfaces → application → domain ← infrastructure`.
 
-* Executive reference: `docs/FIDE_EXTRACTION_ARCHITECTURE.md`
-* API draft: `docs/05-api-contract.md`
-* Swiss-side interface: `docs/06-swiss-client-contract.md`
-* Roadmap: `docs/11-extraction-plan.md`
-* Unknowns: `docs/12-open-decisions.md`
+## API v1 (base `/api/v1`, key in `X-API-Key`, fail closed)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /healthz` | Unauthenticated liveness probe |
+| `GET /status` | Players/ratings/periods/jobs overview |
+| `GET /players/{id}[?include=ratings]` | Identity + latest ratings + dataset period |
+| `GET /players/search?q=&federation=&limit=` | Bounded search (q ≥ 2 chars, limit ≤ 100) |
+| `GET /players/{id}/ratings[?type=&period=]` | Latest or one-period snapshot |
+| `GET /players/{id}/ratings/history[?type=&from=&to=&limit=&offset=]` | Ascending history |
+| `POST /players/batch` `{"ids": [...]}` | Bulk lookup, max 100, partial `missing` tolerated |
+| `POST /admin/jobs/ensure` | Create pending jobs (separate admin credential) |
+| `GET /admin/jobs[?period=]` | Job states, heartbeats, errors |
+| `POST /admin/jobs/retry` | Re-queue one FAILED step |
+| `POST /admin/uploads` | Stage a monthly ZIP (worker prefers staged files) |
+| `GET /admin/verify[?period=]` | Counts + integrity report |
+
+Errors: `{error: {code, message, details, request_id}}` with stable codes
+(`BAD_REQUEST/UNAUTHORIZED/FORBIDDEN/NOT_FOUND/CONFLICT/RATE_LIMITED/
+SERVICE_UNAVAILABLE/INTERNAL`). No tracebacks, no DB errors, no secrets.
+
+## Import model (job-based, the only pipeline)
+
+`ensure → download (or staged) → validate → import (streaming, batches of
+500) → verify → prune non-configured-federation history → cleanup →
+completed`, ordered `standard → rapid → blitz` with atomic claims,
+heartbeats, `WORKER_STALE` recovery, and explicit-only retry. Cron runs
+`flask --app run.py fide-worker [--period YYYY-MM]` every few minutes;
+the web process never spawns import threads.
+
+Data scope: identity + current ratings for ALL federations; multi-period
+history retained per `HISTORY_FEDERATIONS` (default `IRI`), extendable
+without redesign.
+
+## Safety (Phase 1 guarantees)
+
+* Beta/production untouched; no deployment performed.
+* Swiss Manager code and database untouched (no migration, no shared models).
+* No secrets committed (`.env`/venvs/caches/ZIPs gitignored).
+* Unit tests use tiny fixtures — the 100+ MB official file is never needed.
