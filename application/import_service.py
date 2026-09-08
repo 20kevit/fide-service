@@ -142,7 +142,10 @@ def tick(period: str, cfg: JobRunnerConfig,
     and changes nothing.
     """
     validate_period(period)
-    timeout = timeout_seconds or cfg.worker_timeout_seconds
+    # Explicit None means "use the configured default"; any integer —
+    # including 0 — is honored verbatim (``or`` would silently swallow 0).
+    timeout = (cfg.worker_timeout_seconds if timeout_seconds is None
+               else timeout_seconds)
     try:
         staled = FideImportJobRepository.fail_stale_jobs(period, timeout)
         db.session.commit()
@@ -323,12 +326,19 @@ def run_claimed_job(job: FideImportJobModel,
         db.session.commit()
 
         # ── cleanup: delete the consumed archive, sweep old tmp dirs ──
+        # Both steps are best-effort: the import already committed, so a
+        # leftover file must never flip a success into a failure (the
+        # next successful tick sweeps again).
         try:
             if os.path.isfile(zip_path):
                 os.remove(zip_path)
         except OSError as exc:
             log.warning("Tmp ZIP cleanup failed for %s: %s", zip_path, exc)
-        storage.cleanup_old_files(cfg.data_dir, cfg.retention_days)
+        try:
+            storage.cleanup_old_files(cfg.data_dir, cfg.retention_days)
+        except OSError as exc:
+            log.warning("Retention cleanup failed for %s: %s",
+                        cfg.data_dir, exc)
 
         duration = int(time.monotonic() - started)
         _transition(job, "completed")

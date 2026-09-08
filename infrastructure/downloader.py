@@ -93,6 +93,19 @@ def _classify_requests_exception(exc, url):
                         requests.exceptions.Timeout)):
         return FideError(FideErrorCategory.NETWORK_TIMEOUT, stage="connect",
                          detail="Timed out connecting to %s: %s" % (host, text))
+    if isinstance(exc, requests.exceptions.HTTPError):
+        # raise_for_status() failures (e.g. 5xx exhausted retries): the
+        # host answered, so this is an HTTP problem, not a dead network.
+        status = getattr(getattr(exc, "response", None),
+                         "status_code", None)
+        if status == 429:
+            return FideError(FideErrorCategory.HTTP_RATE_LIMIT,
+                             stage="download",
+                             detail="FIDE host rate-limited the download "
+                                    "(HTTP 429).")
+        return FideError(FideErrorCategory.HTTP_ERROR, stage="download",
+                         detail="FIDE host returned an HTTP error (HTTP %s)."
+                         % status)
     if isinstance(exc, requests.exceptions.ConnectionError):
         lowered = text.lower()
         if any(k in lowered for k in ("getaddrinfo", "nodename",

@@ -24,7 +24,7 @@
 
 1. `flask --app run.py db-upgrade` (only when a new migration ships).
 2. `POST /api/v1/admin/jobs/ensure {"period": "YYYY-MM"}` (admin key).
-3. Cron every few minutes: `flask --app run.py fide-worker [--period YYYY-MM]`.
+3. Cron every few minutes: `flask --app run.py fide-worker [--period YYYY-MM] [--timeout SECS]`.
 4. Watch `GET /api/v1/admin/jobs?period=YYYY-MM` until
    `standard/rapid/blitz = completed`.
 5. Confirm `GET /api/v1/status` shows the new `latest_period`.
@@ -52,6 +52,71 @@ Required human action on the host/gateway (NOT in this repo, NOT applied):
 Until that exists, the app-side limiters plus LSAPI child limits are the
 effective backstop (a ~650-request burst was observed to 503 at the
 server with no app 429s — expected under per-process counting).
+
+## Recovery guarantees (verified behavior, not aspirations)
+
+### Worker recovery
+
+* One tick claims and runs exactly ONE step, then exits. A second
+  concurrent worker reports `busy`/`blocked` and changes nothing — a
+  claimed job is never double-processed (row lock on MySQL; heartbeat
+  check everywhere).
+* The worker heartbeats on every state change, every import batch, and
+  (at most every 10 s) during downloads. A step whose heartbeat is older
+  than `IMPORT_TIMEOUT_SECONDS` (default 600; `--timeout SECS` overrides
+  per invocation) is marked `failed/WORKER_STALE` by the next tick.
+* Stale/failed steps NEVER auto-retry. Recover with ONE explicit retry:
+  `flask --app run.py fide-retry --period YYYY-MM --type standard|rapid|blitz`
+  (or `POST /api/v1/admin/jobs/retry`). Successors resume in
+  `standard → rapid → blitz` order afterwards. `completed` is terminal
+  and is never reprocessed.
+
+### Import recovery
+
+* Import commits per `IMPORT_BATCH_SIZE` (default 500). A crash leaves
+  the committed prefix in place — this is intentional, not corruption.
+* Before anything is deleted, the `verifying` stage requires
+  `processed > 0` AND `stored > 0`, else the job fails with
+  `INVALID_FIDE_FORMAT` and the archive is kept for diagnosis.
+* Retrying a failed step reprocesses the same file idempotently
+  (primary/unique-key upserts, last record wins) and converges to the
+  same final counts with no duplicates. Proven by `tests/test_recovery.py`
+  (mid-batch crash, commit-loss crash, verify/prune failure, double run).
+
+### Filesystem recovery
+
+* Downloads stream to `<type>.zip.part` and are atomically renamed only
+  on success; failed downloads delete the `.part` — a partial file is
+  never trusted as a dataset.
+* A staged/consumed ZIP is deleted only after `completed`. Failed jobs
+  keep their ZIP for diagnosis and retry.
+* `tmp/<YYYY-MM>/` directories older than the retention window (90 days)
+  are swept after each success and by `fide-cleanup`. Cleanup is
+  best-effort: its failure warns but never flips a success to failed.
+
+### Database recovery
+
+* Repositories only flush; commits/rollbacks happen exclusively in the
+  application import service at documented boundaries (claim, heartbeat,
+  batch, completion, failure recording). Read paths never write.
+* No downgrades: restore from backup instead (`db-upgrade` only moves
+  forward; `db-status` shows applied vs pending).
+* After any restore: re-run `fide-verify` and spot-check known players
+  before declaring the dataset good.
+
+### Operational recovery
+
+* Detect: `GET /api/v1/admin/jobs?period=YYYY-MM` (states, heartbeats,
+  `error_code`), `GET /api/v1/admin/verify` (`ok` must be true), the
+  `fide_watch.sh` threshold mails, `worker-cron.log` (`OK` vs `IDLE` vs
+  `ERROR` lines), `stderr.log` (tracebacks — there should be none).
+* Retry safely: failed steps via explicit retry (above); never
+  re-`ensure` a period to "fix" it (ensure is idempotent and changes
+  nothing about failed steps).
+* Escalate (manual intervention): repeated failures with the same
+  `error_code` across retries (source/DB/disk problem), `verify` not
+  `ok`, disk pressure `fide-cleanup` cannot clear, or database
+  unreachable (reads fail closed with generic 500s, never partial data).
 
 ## Failure handling
 
