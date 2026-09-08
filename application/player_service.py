@@ -49,7 +49,7 @@ def get_dataset() -> Dict:
 
 
 def player_to_dict(player: FidePlayerModel,
-                   latest: Dict, dataset: Dict) -> Dict:
+                   latest: Dict) -> Dict:
     return {
         "fide_id": player.fide_id,
         "name": player.name,
@@ -76,8 +76,11 @@ def get_player(fide_id: str, include_ratings: bool = True) -> Optional[Dict]:
     latest = (FideRatingRepository.latest_for_player(fid)
               if include_ratings
               else {t: None for t in RATING_TYPES})
-    return {"data": player_to_dict(player, latest, get_dataset()),
-            "dataset": get_dataset()}
+    # One dataset lookup per request: get_dataset() costs two queries
+    # (latest period + import time), so never call it twice here.
+    dataset = get_dataset()
+    return {"data": player_to_dict(player, latest),
+            "dataset": dataset}
 
 
 def search_players(query: str, federation: str = "",
@@ -96,7 +99,7 @@ def search_players(query: str, federation: str = "",
     latest_map = FideRatingRepository.latest_for_players(ids)
     dataset = get_dataset()
     data = [player_to_dict(
-        p, {t: latest_map.get((p.fide_id, t)) for t in RATING_TYPES}, dataset)
+        p, {t: latest_map.get((p.fide_id, t)) for t in RATING_TYPES})
         for p in rows]
     return {"data": data,
             "pagination": {"limit": lim, "offset": 0, "total": len(data)},
@@ -175,7 +178,7 @@ def batch_lookup(fide_ids: List[str],
     dataset = get_dataset()
     found = [player_to_dict(
         players[fid],
-        {t: latest_map.get((fid, t)) for t in RATING_TYPES}, dataset)
+        {t: latest_map.get((fid, t)) for t in RATING_TYPES})
         for fid in cleaned if fid in players]
     missing = [fid for fid in cleaned if fid not in players]
     return {"data": {"found": found, "missing": missing},
