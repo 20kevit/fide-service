@@ -1,20 +1,38 @@
 # FIDE Service — ignore runtime/secrets/generated artifacts
+# Secrets / environment-specific configuration (never commit).
 .env
 *.env
+# Python virtual environments.
 venv/
 .venv/
+# Python bytecode caches.
 __pycache__/
 *.pyc
 *.pyo
+# Runtime database artifacts (the service database is provisioned,
+# never versioned).
 *.db
 *.sqlite
+# Logs.
 *.log
+# FIDE monthly archives and in-flight downloads (import staging).
 *.zip
+*.part
+# Service runtime directories (data staging, Flask instance data).
 instance/
 data/
 var/
 fide.db
+# Test / type-check caches.
 .pytest_cache/
 .mypy_cache/
+# Coverage artifacts.
+.coverage
+htmlcov/
+# Local IDE / editor files.
+.vscode/
+.idea/
+*.swp
+# OS-generated files.
 .DS_Store
 Thumbs.db

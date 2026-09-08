@@ -1,0 +1,25 @@
+# FIDE Service — sample Passenger entry point (cPanel/LiteSpeed hosts).
+#
+# HUMAN ACTION REQUIRED. This file is DOCUMENTATION, not live config:
+# copy it next to run.py as `passenger_wsgi.py` and adjust
+# PassengerAppRoot / PassengerPython in .htaccess to match the host.
+# It contains no secrets and needs none.
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+
+def load_source(modname, filename):
+    loader = importlib.machinery.SourceFileLoader(modname, filename)
+    spec = importlib.util.spec_from_file_location(modname, filename, loader=loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+wsgi = load_source("wsgi", "wsgi.py")
+application = wsgi.application

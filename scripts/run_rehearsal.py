@@ -3,7 +3,7 @@
 Reads connection + paths from the environment/flags — never hard-codes
 credentials or production references:
 
-    set FIDE_REHEARSAL_URL=mysql+pymysql://user:pw@127.0.0.1:3307/db?charset=utf8mb4
+    set FIDE_REHEARSAL_URL=mysql+pymysql://user:YOUR_PASSWORD@127.0.0.1:3307/db?charset=utf8mb4
     python scripts/run_rehearsal.py --xml-dir <generator-out> \
         --workdir <temp> --periods 2026-08 2026-09 --evidence <out.json>
 
