@@ -13,9 +13,10 @@
 | `IMPORT_TIMEOUT_SECONDS` | — | `600` | Heartbeat staleness |
 | `IMPORT_BATCH_SIZE` | — | `500` | Commit cadence (keep unless measured) |
 | `HISTORY_FEDERATIONS` | — | `IRI` | Comma list; empty = keep all history |
-| `RATE_LIMIT_PER_MINUTE` | — | `600` | Per key; 0 disables (never in prod) |
+| `RATE_LIMIT_PER_MINUTE` | — | `600` | Per key per process; 0 disables (never in prod) |
+| `AUTH_FAIL_LIMIT_PER_HOUR` | — | `120` | Rejected-auth budget per IP/hour; over-budget IPs get 429 pre-auth; 0 disables (never in prod) |
 | `FIDE_UPLOAD_MAX_BYTES` | — | `125829120` | Admin upload cap |
-| `FIDE_DOWNLOAD_BASE_URL` | — | `http://ratings.fide.com/download/` | Outbound only |
+| `FIDE_DOWNLOAD_BASE_URL` | — | `https://ratings.fide.com/download/` | Outbound only; HTTP override only if HTTPS provably fails (MITM risk) |
 | `FIDE_CONNECT_TIMEOUT` / `FIDE_READ_TIMEOUT` / `FIDE_MAX_RETRIES` | — | `10` / `30` / `3` | Downloader bounds |
 | Local dev only | — | — | `RATE_LIMIT_PER_MINUTE=0`, SQLite file |
 
@@ -27,6 +28,30 @@
 4. Watch `GET /api/v1/admin/jobs?period=YYYY-MM` until
    `standard/rapid/blitz = completed`.
 5. Confirm `GET /api/v1/status` shows the new `latest_period`.
+
+## Gateway rate limiting (production-only human action)
+
+The in-app limiters (`interfaces/api/auth.py`: per-key sliding window +
+pre-auth per-IP rejected-attempt budget) are process-local by design —
+under multi-process Passenger/LSAPI each worker counts independently, so
+they are defense-in-depth, not a global cap. No shared store (Redis or
+equivalent) exists on this stack, and none is introduced for this.
+
+Required human action on the host/gateway (NOT in this repo, NOT applied):
+
+1. Add a global per-IP connection/request throttle at the server or CDN
+   layer (LiteSpeed server-level throttle rules, or a proxy such as
+   Cloudflare Rate Limiting). Suggested starting point: well above
+   legitimate use (the Swiss client makes a handful of reads per
+   tournament operation), e.g. hundreds of requests/min/IP with a short
+   block, plus a stricter rule for repeated 401/403 responses (key
+   guessing tripwire).
+2. Alert on `auth rejected` / `rate limit exceeded` log lines and on
+   `failed` import jobs (see Logging/Monitoring below).
+
+Until that exists, the app-side limiters plus LSAPI child limits are the
+effective backstop (a ~650-request burst was observed to 503 at the
+server with no app 429s — expected under per-process counting).
 
 ## Failure handling
 

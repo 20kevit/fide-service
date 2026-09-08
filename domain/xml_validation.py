@@ -18,6 +18,56 @@ REQUIRED_PLAYER_FIELDS = ("fideid", "name", "country")
 #: Refuse XML entity expansion (XXE / billion-laughs) outright.
 _FORBIDDEN_MARKERS = ("<!ENTITY", "<!DOCTYPE")
 
+#: Byte markers for the whole-stream scan (same set, binary form).
+_SCAN_MARKERS = tuple(m.encode("ascii") for m in _FORBIDDEN_MARKERS)
+#: Overlap kept between consecutive reads so a marker split across a
+#: chunk boundary is still detected (longest marker minus one byte).
+_SCAN_OVERLAP = max(len(m) for m in _SCAN_MARKERS) - 1
+
+
+class _MarkerScanningStream:
+    """Binary read-wrapper rejecting ENTITY/DOCTYPE anywhere in a stream.
+
+    The 64 KB head pre-scan (``_check_head``) fast-fails the common case,
+    but a hostile file could pad past it. This wrapper scans every byte
+    as it flows through ``read()`` — chunk by chunk with a small overlap
+    tail — so arbitrarily placed markers are caught without ever holding
+    the whole (hundreds-of-MB) file in memory. Raises ``FideError`` with
+    the same category as the head check. All other attributes delegate
+    to the wrapped stream; callers still own closing (via this wrapper).
+    """
+
+    def __init__(self, stream: BinaryIO):
+        self._stream = stream
+        self._tail = b""
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._stream.read(size)
+        if data:
+            if isinstance(data, bytes):
+                window = self._tail + data
+                upper = window.upper()
+                for marker in _SCAN_MARKERS:
+                    if marker in upper:
+                        raise FideError(
+                            FideErrorCategory.INVALID_XML, stage="validate",
+                            detail="File contains a forbidden "
+                            "ENTITY/DOCTYPE declaration and was rejected "
+                            "on security grounds.")
+                self._tail = window[-_SCAN_OVERLAP:]
+            else:  # pragma: no cover — binary streams only in practice
+                self._tail = b""
+        return data
+
+    def close(self) -> None:
+        try:
+            self._stream.close()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
 
 @dataclass
 class FideValidationResult:
@@ -68,6 +118,10 @@ def _check_structure(source) -> tuple:
     try:
         context = ET.iterparse(source, events=("start", "end"))
         _, root = next(context)
+    except FideError:
+        # Security wrapper rejections (whole-stream marker scan) keep
+        # their category — never downgrade them to a read error.
+        raise
     except ET.ParseError as exc:
         raise FideError(FideErrorCategory.INVALID_XML, stage="validate",
                         detail="Malformed XML: %s" % exc)
@@ -158,7 +212,7 @@ def validate_xml_path(path: str,
                         stage="validate", detail=str(exc))
     _check_size(size, os.path.basename(path), max_bytes)
     _check_head(_read_head(lambda: open(path, "rb")))
-    stream = open(path, "rb")
+    stream = _MarkerScanningStream(open(path, "rb"))
     try:
         root_tag, players_found, sample_ok = _check_structure(stream)
     finally:
@@ -180,7 +234,11 @@ def validate_stream(stream_factory: Callable[[], BinaryIO],
     if size_bytes:
         _check_size(size_bytes, display_name, max_bytes)
     _check_head(_read_head(stream_factory))
-    stream = stream_factory()
+
+    def _scanning_factory() -> BinaryIO:
+        return _MarkerScanningStream(stream_factory())
+
+    stream = _scanning_factory()
     try:
         root_tag, players_found, sample_ok = _check_structure(stream)
     finally:

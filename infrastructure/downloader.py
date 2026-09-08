@@ -4,12 +4,15 @@ Streamed to disk (never response.content), bounded timeouts, retries with
 backoff ONLY for transient problems; permanent statuses fail fast. All
 failures raise classified FideError.
 """
+import logging
 import os
 import time
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import requests
+
+log = logging.getLogger(__name__)
 
 from domain.errors import FideError, FideErrorCategory
 from domain.models import RATING_TYPES
@@ -46,10 +49,25 @@ def build_rating_url(base_url: str, rating_type: str, period: str) -> str:
         rating_type, _MONTH_IDS[month - 1], year % 100)
 
 
+def source_is_secure(url: str) -> bool:
+    """True when a source URL uses HTTPS.
+
+    Plain HTTP is tolerated only as an explicit operator override
+    (``FIDE_DOWNLOAD_BASE_URL``) — never silently. Callers must warn.
+    """
+    try:
+        return urlparse(url).scheme.lower() == "https"
+    except (AttributeError, ValueError):
+        return False
+
+
 def verify_rating_url(url: str, timeout: int = 10) -> dict:
     """HEAD reachability check. Never downloads the body."""
     try:
-        resp = requests.head(url, timeout=timeout, allow_redirects=True)
+        # verify=True is the requests default; stated explicitly so TLS
+        # can never be disabled by accident in a future edit.
+        resp = requests.head(url, timeout=timeout, allow_redirects=True,
+                             verify=True)
         ok = resp.status_code == 200
         length = resp.headers.get("Content-Length", "")
         return {
@@ -102,12 +120,18 @@ def download_fide_zip(url, dest_zip_path,
     Returns the final size in bytes. Retries transient failures only.
     """
     os.makedirs(os.path.dirname(dest_zip_path) or ".", exist_ok=True)
+    if not source_is_secure(url):
+        # Audible, not silent: HTTP admits MITM content swaps. Allowed
+        # only as a deliberate operator override; HTTPS is the default.
+        log.warning("Downloading FIDE archive over plain HTTP: %s",
+                    urlparse(url).hostname or "unknown-host")
     tmp_path = dest_zip_path + ".part"
     attempt = 0
     while True:
         try:
             with requests.get(url, stream=True,
-                              timeout=(connect_timeout, read_timeout)) as resp:
+                              timeout=(connect_timeout, read_timeout),
+                              verify=True) as resp:
                 if resp.status_code == 429:
                     raise FideError(
                         FideErrorCategory.HTTP_RATE_LIMIT, stage="download",

@@ -36,8 +36,9 @@ class Settings:
     import_batch_size: int = 500
     history_federations: List[str] = field(default_factory=lambda: ["IRI"])
     rate_limit_per_minute: int = 600
+    auth_fail_limit_per_hour: int = 120
     upload_max_bytes: int = 120 * 1024 * 1024
-    download_base_url: str = "http://ratings.fide.com/download/"
+    download_base_url: str = "https://ratings.fide.com/download/"
     connect_timeout: int = 10
     read_timeout: int = 30
     max_retries: int = 3
@@ -81,9 +82,10 @@ def load_settings() -> Settings:
         import_batch_size=_get_int("IMPORT_BATCH_SIZE", 500),
         history_federations=_get_history_federations(),
         rate_limit_per_minute=_get_int("RATE_LIMIT_PER_MINUTE", 600),
+        auth_fail_limit_per_hour=_get_int("AUTH_FAIL_LIMIT_PER_HOUR", 120),
         upload_max_bytes=_get_int("FIDE_UPLOAD_MAX_BYTES", 120 * 1024 * 1024),
         download_base_url=os.environ.get(
-            "FIDE_DOWNLOAD_BASE_URL", "http://ratings.fide.com/download/"),
+            "FIDE_DOWNLOAD_BASE_URL", "https://ratings.fide.com/download/"),
         connect_timeout=_get_int("FIDE_CONNECT_TIMEOUT", 10),
         read_timeout=_get_int("FIDE_READ_TIMEOUT", 30),
         max_retries=_get_int("FIDE_MAX_RETRIES", 3),

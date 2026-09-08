@@ -121,6 +121,19 @@ CATEGORY_MESSAGES = {
 }
 
 
+def public_error_summary(category) -> str:
+    """Safe one-line failure summary for API exposure.
+
+    Built only from the curated ``CATEGORY_MESSAGES`` table — never from
+    exception text, SQL, paths, or player data. The raw detail stays
+    server-side (worker logs); API clients get code + summary + advice.
+    Unknown/missing categories map to the generic entry.
+    """
+    title, advice = CATEGORY_MESSAGES.get(
+        category, CATEGORY_MESSAGES[FideErrorCategory.UNKNOWN_ERROR])
+    return "%s. %s" % (title, advice)
+
+
 class FideError(Exception):
     """Classified failure: category + stage + safe detail + advice."""
 

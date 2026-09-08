@@ -83,7 +83,9 @@ unknown player → 404.
 
 - `POST /admin/jobs/ensure` `{"period": "YYYY-MM"}` → 202 + 3 jobs.
 - `GET /admin/jobs[?period=&limit=]` (limit ≤ 100) → job states,
-  heartbeats, progress, error codes (sanitized).
+  heartbeats, progress, error codes with curated summaries (sanitized:
+  `error_message` never carries SQL, paths, or raw exception text —
+  full detail stays in server-side worker logs).
 - `POST /admin/jobs/retry` `{"period", "rating_type"}` → re-queues one
   FAILED step (completed/active → 400).
 - `POST /admin/uploads` (multipart `period`, `rating_type`, `file` .zip)

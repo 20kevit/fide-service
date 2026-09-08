@@ -23,6 +23,7 @@ def make_settings(tmp_path, **overrides):
         secret_key="test-secret",
         data_directory=str(data_dir),
         rate_limit_per_minute=0,  # disabled unless a test opts in
+        auth_fail_limit_per_hour=0,  # disabled unless a test opts in
         history_federations=["IRI"],
     )
     args.update(overrides)

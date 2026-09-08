@@ -16,7 +16,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-from domain.errors import FideError, FideErrorCategory, classify_exception
+from domain.errors import (
+    FideError, FideErrorCategory, classify_exception,
+    public_error_summary,
+)
 from domain.models import RATING_TYPE_ORDER, can_transition
 from domain.parser import parse_fide_xml
 from domain.validation import validate_period, validate_rating_type
@@ -57,6 +60,10 @@ class JobRunnerConfig:
 
 
 def job_to_dict(job: FideImportJobModel) -> Dict[str, Any]:
+    # error_message is DELIBERATELY sanitized: the stored raw text can
+    # embed SQL fragments, paths, or player data (see audit L4). API
+    # clients receive only the curated code + summary; full detail stays
+    # in the server-side worker logs for operators.
     return {
         "period": job.period,
         "rating_type": job.rating_type,
@@ -67,7 +74,8 @@ def job_to_dict(job: FideImportJobModel) -> Dict[str, Any]:
         "records_processed": job.records_processed or 0,
         "total_records": job.total_records,
         "error_code": job.error_code,
-        "error_message": job.error_message,
+        "error_message": (public_error_summary(job.error_code)
+                          if job.state == "failed" else None),
         "source_url": job.source_url,
         "file_name": job.file_name,
     }

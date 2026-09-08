@@ -27,6 +27,20 @@ def create_app(settings: Settings = None) -> Flask:
 
     db.init_app(app)
 
+    @app.after_request
+    def _security_headers(response):
+        """Minimal headers appropriate for a JSON API.
+
+        nosniff blocks MIME-sniffing of JSON as HTML; no-referrer states
+        the API never wants navigational referrers. Deliberately absent:
+        HSTS and HTTP->HTTPS redirect — those are only meaningful from
+        the TLS-terminating gateway (see deployment/htaccess.sample),
+        and X-Frame-Options/CSP — no browser-rendered content exists.
+        """
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
+
     app.register_blueprint(players.bp, url_prefix="/api/v1")
     app.register_blueprint(status.bp, url_prefix="/api/v1")
     app.register_blueprint(admin.bp, url_prefix="/api/v1")

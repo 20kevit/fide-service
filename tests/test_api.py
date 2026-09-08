@@ -257,6 +257,28 @@ class TestAdmin:
         resp = client.get("/api/v1/admin/jobs")
         assert resp.status_code == 401
 
+    def test_failed_job_error_sanitized(self, client, admin_headers):
+        from domain.errors import public_error_summary
+        from infrastructure.database import db
+        from infrastructure.models import FideImportJobModel
+        client.post("/api/v1/admin/jobs/ensure", json={"period": "2026-09"},
+                    headers=admin_headers)
+        job = db.session.query(FideImportJobModel).filter_by(
+            period="2026-09", rating_type="standard").first()
+        job.state = "failed"
+        job.error_code = "DATABASE_ERROR"
+        job.error_message = (
+            'DATABASE_ERROR: (pymysql.err.DataError) (1406, "Data too long")'
+            " [SQL: INSERT INTO fide_players (name) VALUES ('Secret Player')]")
+        db.session.commit()
+        jobs = client.get("/api/v1/admin/jobs?period=2026-09",
+                          headers=admin_headers).get_json()["data"]["jobs"]
+        std = [j for j in jobs if j["rating_type"] == "standard"][0]
+        assert std["error_code"] == "DATABASE_ERROR"
+        assert std["error_message"] == public_error_summary("DATABASE_ERROR")
+        for leaked in ("INSERT", "Secret Player", "1406", "pymysql", "fide_players"):
+            assert leaked not in std["error_message"]
+
     def test_verify_endpoint(self, client, seeded, admin_headers):
         resp = client.get("/api/v1/admin/verify", headers=admin_headers)
         body = resp.get_json()["data"]
