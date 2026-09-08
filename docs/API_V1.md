@@ -90,6 +90,9 @@ unknown player → 404.
   FAILED step (completed/active → 400).
 - `POST /admin/uploads` (multipart `period`, `rating_type`, `file` .zip)
   → 201 staged; worker prefers staged files over downloading.
+  Response includes `period_match` (official filename vs job period);
+  `false` still stages but warns — the XML carries no period metadata,
+  so confirm contents for non-official names (see `16-data-integrity`).
 - `GET /admin/verify[?period=]` → counts + integrity report
   (duplicates, nulls, invalid types, orphans, periods).
 

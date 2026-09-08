@@ -11,7 +11,7 @@ from flask import Blueprint, current_app, jsonify, request
 
 from application import checks, import_service
 from domain.validation import validate_period, validate_rating_type
-from infrastructure import storage
+from infrastructure import downloader, storage
 from infrastructure.repositories import FideImportJobRepository
 from interfaces.api.auth import require_admin_key
 from interfaces.api.errors import ApiError
@@ -120,12 +120,25 @@ def stage_upload():
         os.remove(dest)
         raise ApiError("BAD_REQUEST",
                        "Uploaded archive contains no usable FIDE XML.")
+    # Period trust verdict: the XML carries no period metadata, so a
+    # mislabeled staged file would import silently under the wrong period.
+    # Official archives encode it in the filename; anything else yields
+    # False (still staged — never a rejection) and a warning for the
+    # operator to confirm contents before the worker consumes the file.
+    period_match = downloader.archive_matches_period(
+        upload.filename, rating_type, period)
+    if not period_match:
+        log.warning("Admin: staged upload filename %r does not match "
+                    "period %s/%s — confirm contents before import",
+                    os.path.basename(upload.filename or ""), period,
+                    rating_type)
     log.info("Admin: staged upload %s/%s (%d bytes, member %s)",
              period, rating_type, size, member)
     return jsonify({"data": {"period": period, "rating_type": rating_type,
                              "file_name": os.path.basename(dest),
                              "size_bytes": size, "member": member,
-                             "member_bytes": declared}}), 201
+                             "member_bytes": declared,
+                             "period_match": period_match}}), 201
 
 
 @bp.get("/admin/verify")

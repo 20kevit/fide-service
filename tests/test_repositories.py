@@ -66,15 +66,13 @@ class TestRatingRepository:
         db.session.add(FideRatingModel(
             fide_id="no-such-player", period="2026-09",
             rating_type="standard", rating=2000))
-        try:
+        with pytest.raises(IntegrityError):
             db.session.flush()
-            fk_enforced = False
-        except IntegrityError:
-            fk_enforced = True
-            db.session.rollback()
-        # SQLite only enforces FKs with PRAGMA foreign_keys=ON; the
-        # assertion documents intent, the service never relies on it.
-        assert fk_enforced in (True, False)
+        db.session.rollback()
+        # FKs are enforced on every engine now: natively on MySQL/InnoDB,
+        # and on SQLite via PRAGMA foreign_keys=ON at connect
+        # (infrastructure/database.py). Orphan ratings are impossible to
+        # persist; application verification remains as a second net.
 
     def test_latest_is_db_side(self, app, seeded):
         latest = FideRatingRepository.latest_for_player("12512294")

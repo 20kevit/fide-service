@@ -27,6 +27,10 @@ def create_app(settings: Settings = None) -> Flask:
 
     db.init_app(app)
 
+    from infrastructure.database import enable_sqlite_foreign_keys
+    with app.app_context():
+        enable_sqlite_foreign_keys(db.engine)
+
     @app.after_request
     def _security_headers(response):
         """Minimal headers appropriate for a JSON API.

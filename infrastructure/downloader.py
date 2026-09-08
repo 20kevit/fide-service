@@ -30,6 +30,42 @@ _MONTH_IDS = ("jan", "feb", "mar", "apr", "may", "jun",
               "jul", "aug", "sep", "oct", "nov", "dec")
 
 
+def period_archive_token(period: str) -> str:
+    """Official mid-filename token for a period, e.g. 2026-09 -> 'sep26'.
+
+    The monthly archives are named ``<type>_<mon><yy>frl_xml.zip``. Raises
+    ValueError on malformed periods — never guess a token.
+    """
+    try:
+        year_s, mon_s = period.split("-")
+        year, month = int(year_s), int(mon_s)
+    except (ValueError, AttributeError):
+        raise ValueError("period must be YYYY-MM, got %r" % (period,))
+    if not 1 <= month <= 12 or year < 2000 or len(year_s) != 4:
+        raise ValueError("period must be YYYY-MM, got %r" % (period,))
+    return "%s%02d" % (_MONTH_IDS[month - 1], year % 100)
+
+
+def archive_matches_period(file_name: str, rating_type: str,
+                           period: str) -> bool:
+    """True when an archive filename looks like this period's official file.
+
+    Lenient by design: custom/renamed archives return False but are still
+    accepted (the verdict is reported + logged, never a rejection) —
+    emergency restores must not be blocked by naming. A False verdict
+    means "operator must confirm the contents match the period", because
+    the XML itself carries no period metadata and the import trusts the
+    job period unconditionally.
+    """
+    try:
+        base = os.path.basename(file_name or "").lower()
+        token = period_archive_token(period).lower()
+    except (ValueError, AttributeError):
+        return False
+    return (base.startswith(rating_type.lower() + "_")
+            and token in base)
+
+
 def build_rating_url(base_url: str, rating_type: str, period: str) -> str:
     """Official monthly per-type archive URL (pure function).
 
