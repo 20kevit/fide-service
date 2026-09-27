@@ -219,6 +219,12 @@ class TestMySQLPlans:
                     ("SELECT * FROM fide_players WHERE name LIKE '%test%' "
                      "LIMIT 20",
                      False),  # documented: leading wildcard => full scan
+                "orphan_covering":
+                    ("SELECT COUNT(*) FROM fide_ratings LEFT OUTER JOIN "
+                     "fide_players ON fide_ratings.fide_id = "
+                     "fide_players.fide_id "
+                     "WHERE fide_players.fide_id IS NULL",
+                     True),  # covered by the UQ composite, no single-col idx
             }
             summary = {}
             for name, (sql, indexed) in cases.items():
@@ -228,3 +234,30 @@ class TestMySQLPlans:
                 if indexed:
                     assert all(k[0] for k in keys), (name, summary[name])
             print("\nMySQL EXPLAIN summary: %s" % summary)
+
+
+class TestMySQLMigrations:
+    """Forward migration chain on a disposable MySQL database."""
+
+    @needs_mysql
+    def test_chain_applies_and_v0003_drops_legacy_index(self, mysql_app):
+        import importlib
+        from infrastructure import migrations
+        from infrastructure.database import db
+        with mysql_app.app_context():
+            assert migrations.pending_migrations(db.engine) == []
+            assert "0003_drop_redundant_rating_index" in (
+                migrations.applied_versions(db.engine))
+            module = importlib.import_module(
+                "migrations.versions.v0003_drop_redundant_rating_index")
+            # Simulate a pre-0003 schema, then upgrade twice.
+            db.session.execute(text(
+                "CREATE INDEX ix_fide_ratings_fide_id "
+                "ON fide_ratings (fide_id)"))
+            module.upgrade(db.engine)
+            module.upgrade(db.engine)  # idempotent no-op
+            leftovers = db.session.execute(text(
+                "SHOW INDEX FROM fide_ratings "
+                "WHERE Key_name = 'ix_fide_ratings_fide_id'")).all()
+            assert leftovers == []
+            assert migrations.pending_migrations(db.engine) == []

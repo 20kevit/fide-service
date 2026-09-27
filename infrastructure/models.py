@@ -51,9 +51,14 @@ class FideRatingModel(db.Model):
     __tablename__ = "fide_ratings"
 
     id = db.Column(db.Integer, primary_key=True)
+    # No single-column index on fide_id: both composites below start with
+    # it, so fide_id-only predicates are served by their leftmost prefix
+    # (migration 0003 drops the redundant ix_fide_ratings_fide_id).
+    # ``period`` keeps its own index: no composite leads with it, and
+    # period-only predicates (verify counts, prune scope) need it.
     fide_id = db.Column(db.String(20),
                         db.ForeignKey("fide_players.fide_id"),
-                        nullable=False, index=True)
+                        nullable=False)
     period = db.Column(db.String(7), nullable=False, index=True)
     rating_type = db.Column(db.String(10), nullable=False)
     rating = db.Column(db.Integer, default=0)

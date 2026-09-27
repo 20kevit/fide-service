@@ -204,11 +204,16 @@ def get_status() -> Dict:
             "jobs": states,
             "imported_at": dataset["imported_at"],
         }
+    # The per-type rollup already visits every rating row, so the total
+    # is derived as its sum instead of a second full-table COUNT scan.
+    # Exact (every row belongs to exactly one type group), one query
+    # fewer on a monitoring-cadence endpoint.
+    by_type = FideRatingRepository.count_by_type()
     return {"data": {
         "ok": True,
         "players": FidePlayerRepository.count(),
-        "ratings": FideRatingRepository.count(),
-        "by_type": FideRatingRepository.count_by_type(),
+        "ratings": sum(by_type.values()),
+        "by_type": by_type,
         "periods": FideRatingRepository.periods(),
         "latest_period": dataset["period"],
         "last_import": last_import,

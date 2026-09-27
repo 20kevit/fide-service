@@ -1,7 +1,10 @@
 """Consistent JSON error contract. No business imports."""
 
+import logging
 import uuid
-from flask import jsonify, request
+from flask import g, has_request_context, jsonify, request
+
+log = logging.getLogger(__name__)
 
 #: Stable machine-readable codes (HTTP status in parentheses).
 CODE_STATUS = {
@@ -31,15 +34,40 @@ class ApiError(Exception):
 
 
 def error_response(code, message, details=None, headers=None):
-    """Build the envelope. Never includes tracebacks, DB errors, secrets."""
+    """Build the envelope. Never includes tracebacks, DB errors, secrets.
+
+    The ``request_id`` is shared with the per-request id assigned in the
+    app factory, so auth rejections and the client-visible envelope carry
+    the SAME id (see _reject in auth.py). It is also logged server-side
+    (with the sanitized path, never query strings or headers) so a
+    client-reported id can always be correlated to these logs. 5xx ->
+    error, 429 -> warning, anything else -> info (probe/typo traffic
+    must not read as a crisis).
+    """
+    if has_request_context():
+        request_id = getattr(g, "request_id", None) or uuid.uuid4().hex
+    else:  # defensive: envelope builders always run in a request
+        request_id = uuid.uuid4().hex
+    status = CODE_STATUS[code]
+    path = ((request.path or "")[:128]
+            .replace("\r", "").replace("\n", ""))
+    if status >= 500:
+        log.error("api error code=%s status=%d path=%s request_id=%s",
+                  code, status, path, request_id)
+    elif status == 429:
+        log.warning("api error code=%s status=%d path=%s request_id=%s",
+                    code, status, path, request_id)
+    else:
+        log.info("api error code=%s status=%d path=%s request_id=%s",
+                 code, status, path, request_id)
     body = {"error": {
         "code": code,
         "message": message,
         "details": details or {},
-        "request_id": uuid.uuid4().hex,
+        "request_id": request_id,
     }}
     resp = jsonify(body)
-    resp.status_code = CODE_STATUS[code]
+    resp.status_code = status
     for key, value in (headers or {}).items():
         resp.headers[key] = value
     return resp

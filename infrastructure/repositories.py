@@ -46,7 +46,16 @@ class FidePlayerRepository:
     def search(query: str, federation: str = "",
                limit: int = 20) -> List[FidePlayerModel]:
         """Bounded search: numeric q → fide_id prefix; else ALL name terms
-        (case-insensitive substring). Optional exact federation filter."""
+        (case-insensitive substring). Optional exact federation filter.
+
+        Name search is a leading-wildcard scan by necessity (no B-tree or
+        trigram index serves ``%term%`` at this scale without a search
+        engine, which the project deliberately avoids): cost grows
+        linearly with table size (~4 s worst-case zero-match at 786k rows
+        on the production host). The ``limit`` bound keeps result
+        materialization small, but callers must expect slow misses; per-key
+        rate limiting is the backstop, not the query planner.
+        """
         stmt = select(FidePlayerModel)
         if query:
             if query.isdigit():
@@ -167,25 +176,62 @@ class FideRatingRepository:
             stmt = stmt.where(FideRatingModel.period == period)
         return {r[0]: r[1] for r in db.session.execute(stmt).all()}
 
+    #: Rows deleted per prune chunk. Each chunk is flushed and reported
+    #: through ``progress_cb`` (the service heartbeats there, which also
+    #: commits), so even a million-row prune never goes longer than about
+    #: one chunk without a fresh heartbeat. Sized from measured DELETE
+    #: throughput (~4k rows/s on the production host => ~25 s per chunk,
+    #: far under the 600 s worker stale timeout).
+    PRUNE_CHUNK_SIZE = 100000
+
     @staticmethod
     def prune_history(keep_period: str, rating_type: str,
-                      keep_federations: List[str]) -> int:
+                      keep_federations: List[str],
+                      chunk_size: int = PRUNE_CHUNK_SIZE,
+                      progress_cb=None) -> int:
         """Delete pre-``keep_period`` snapshots of one type for players
         OUTSIDE ``keep_federations``. Empty keep-list keeps everything.
         Returns deleted row count. This is what makes history IRI-only
         while identity + current ratings stay global.
+
+        Deletion runs in deterministic ``id``-ordered chunks (portable
+        across SQLite and MySQL — no engine-specific ``DELETE..LIMIT``),
+        so a large prune heartbeats regularly instead of sitting inside
+        one huge statement past the worker stale timeout. Chunked commits
+        also bound the undo log. Re-running deletes only what is left
+        (idempotent): already-pruned rows simply match nothing.
+        ``progress_cb`` receives the cumulative deleted count after each
+        non-empty chunk; it may commit (the service heartbeat does).
+        Flush-only otherwise: callers own the final commit.
         """
         if not keep_federations:
             return 0
+        if not chunk_size or chunk_size < 1:
+            chunk_size = FideRatingRepository.PRUNE_CHUNK_SIZE
         keep_ids = (select(FidePlayerModel.fide_id)
                     .where(FidePlayerModel.federation.in_(keep_federations)))
-        stmt = (FideRatingModel.__table__.delete().where(and_(
-            FideRatingModel.rating_type == rating_type,
-            FideRatingModel.period < keep_period,
-            ~FideRatingModel.fide_id.in_(keep_ids))))
-        result = db.session.execute(stmt)
-        db.session.flush()
-        return result.rowcount or 0
+        total = 0
+        last_id = 0
+        while True:
+            id_batch = db.session.execute(
+                select(FideRatingModel.id).where(and_(
+                    FideRatingModel.rating_type == rating_type,
+                    FideRatingModel.period < keep_period,
+                    ~FideRatingModel.fide_id.in_(keep_ids),
+                    FideRatingModel.id > last_id))
+                .order_by(FideRatingModel.id.asc())
+                .limit(chunk_size)).scalars().all()
+            if not id_batch:
+                break
+            db.session.execute(
+                FideRatingModel.__table__.delete().where(
+                    FideRatingModel.id.in_(id_batch)))
+            db.session.flush()
+            total += len(id_batch)
+            last_id = id_batch[-1]
+            if progress_cb is not None:
+                progress_cb(total)
+        return total
 
 
 class FideImportJobRepository:

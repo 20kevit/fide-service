@@ -127,11 +127,21 @@ def get_history(fide_id):
     return jsonify(payload)
 
 
+#: Largest accepted batch body. A valid batch (<=100 short IDs) fits in a
+#: few kilobytes; anything near this bound is abuse or a client bug.
+#: Checked BEFORE JSON parsing so a huge body cannot spike CPU/RAM.
+#: The global MAX_CONTENT_LENGTH stays upload-sized for /admin/uploads.
+BATCH_MAX_BODY_BYTES = 64 * 1024
+
+
 @bp.post("/players/batch")
 @require_api_key
 def batch_lookup():
     if not request.is_json:
         raise ApiError("BAD_REQUEST", "Request body must be JSON.")
+    content_length = request.content_length
+    if content_length is not None and content_length > BATCH_MAX_BODY_BYTES:
+        raise ApiError("BAD_REQUEST", "Request body exceeds the size limit.")
     body = request.get_json(silent=True) or {}
     ids = body.get("ids", body.get("fide_ids"))
     if not isinstance(ids, list) or not ids:

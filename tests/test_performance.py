@@ -79,11 +79,16 @@ class TestQueryShapes:
         assert resp.status_code == 200
         assert query_counter["n"] == 4
 
-    def test_status_eight_queries(self, client, seeded, auth_headers,
-                                  query_counter):
+    def test_status_seven_queries(self, client, seeded, auth_headers,
+                                   query_counter):
         resp = client.get("/api/v1/status", headers=auth_headers)
         assert resp.status_code == 200
-        assert query_counter["n"] == 8
+        # Was 8 before the ratings-total change: the total is now derived
+        # as sum(by_type) instead of a second full-table COUNT scan.
+        # Any increase is still a regression.
+        assert query_counter["n"] == 7
+        body = resp.get_json()["data"]
+        assert body["ratings"] == sum(body["by_type"].values())
 
     def test_admin_jobs_one_query(self, client, admin_headers,
                                   query_counter):

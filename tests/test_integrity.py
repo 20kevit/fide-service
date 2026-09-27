@@ -88,6 +88,32 @@ class TestIdentityRules:
                    FideRatingRepository.history("12512294")}
         assert periods == {PREV, PERIOD}
 
+    def test_federation_normalized_at_write_boundary(
+            self, app, fixture_path):
+        from application import player_service
+        cfg = make_cfg(app, fixture_path)
+        run_period(app, cfg, PREV)
+        xml = _standard_xml(fixture_path).replace(
+            b"<country>IRI</country>", b"<country> iri </country>")
+        xml = xml.replace(b"<country>GER</country>", b"<country>ger</country>")
+        _stage(cfg, PERIOD, "standard", xml)
+        import_service.ensure_period_jobs(PERIOD)
+        assert import_service.tick(PERIOD, cfg)["status"] == "success"
+        # Stored uppercase without padding...
+        assert (FidePlayerRepository.get_by_fide_id("12512294").federation
+                == "IRI")
+        assert (FidePlayerRepository.get_by_fide_id("99900001").federation
+                == "GER")
+        # ...searchable through the normalizing read filter...
+        found = player_service.search_players("Alpha", federation="iri")
+        assert [p["fide_id"] for p in found["data"]] == ["12512294"]
+        # ...and pruned by the real federation: IRI history kept, the
+        # lowercased GER history pruned like any other foreign row.
+        assert {r.period for r in FideRatingRepository.history(
+            "12512294", rating_type="standard")} == {PREV, PERIOD}
+        assert {r.period for r in FideRatingRepository.history(
+            "99900001", rating_type="standard")} == {PERIOD}
+
     def test_empty_name_skipped_not_stored(self, app, fixture_path):
         cfg = make_cfg(app, fixture_path)
         import_service.ensure_period_jobs(PERIOD)
@@ -401,6 +427,95 @@ class TestPruneExtended:
         run_period(app, cfg, PERIOD)
         assert {r.period for r in FideRatingRepository.history(
             "99900001", rating_type="standard")} == {PREV, PERIOD}
+
+
+class TestPruneScale:
+    """Chunked prune at scale: progress, correctness, idempotency.
+
+    Seeds hundreds of players across old + current periods (GER prunable,
+    IRI protected) and prunes with a small chunk size so multiple chunks
+    are exercised on the disposable test database.
+    """
+
+    OLD_PERIODS = ("2026-06", "2026-07")
+    CURRENT = "2026-09"
+    N_GER = 400
+    N_IRI = 100
+
+    def _seed_scale(self):
+        from tests.conftest import seed_player, seed_rating
+        for i in range(self.N_GER):
+            fid = "9900%04d" % i
+            seed_player(fid, name="Scale, Ger %d" % i, federation="GER")
+            for per in self.OLD_PERIODS:
+                seed_rating(fid, per, "standard", 2400)
+            seed_rating(fid, self.CURRENT, "standard", 2410)
+            if i < 10:
+                # Other rating types must survive a standard prune.
+                seed_rating(fid, self.OLD_PERIODS[0], "rapid", 2350)
+        for i in range(self.N_IRI):
+            fid = "1250%04d" % i
+            seed_player(fid, name="Scale, Iri %d" % i, federation="IRI")
+            for per in self.OLD_PERIODS:
+                seed_rating(fid, per, "standard", 2300)
+            seed_rating(fid, self.CURRENT, "standard", 2310)
+        db.session.commit()
+
+    def test_chunked_prune_reports_progress(self, app):
+        self._seed_scale()
+        seen = []
+        deleted = FideRatingRepository.prune_history(
+            self.CURRENT, "standard", ["IRI"], chunk_size=150,
+            progress_cb=seen.append)
+        assert deleted == self.N_GER * len(self.OLD_PERIODS)
+        assert len(seen) > 1  # several chunks, not one big statement
+        assert seen == sorted(seen)  # cumulative and monotonic
+        assert seen[-1] == deleted  # final callback reports the total
+
+    def test_chunked_prune_keeps_protected_rows(self, app):
+        self._seed_scale()
+        FideRatingRepository.prune_history(
+            self.CURRENT, "standard", ["IRI"], chunk_size=150)
+        db.session.commit()
+        # GER old standard rows are gone...
+        assert db.session.query(FideRatingModel).filter(
+            FideRatingModel.period.in_(self.OLD_PERIODS),
+            FideRatingModel.rating_type == "standard",
+            FideRatingModel.fide_id.like("9900%")).count() == 0
+        # ...IRI history survives...
+        assert db.session.query(FideRatingModel).filter(
+            FideRatingModel.period.in_(self.OLD_PERIODS),
+            FideRatingModel.rating_type == "standard",
+            FideRatingModel.fide_id.like("1250%")).count() == (
+                self.N_IRI * len(self.OLD_PERIODS))
+        # ...current ratings survive for every federation...
+        assert db.session.query(FideRatingModel).filter(
+            FideRatingModel.period == self.CURRENT).count() == (
+                self.N_GER + self.N_IRI)
+        # ...and other rating types are untouched.
+        assert db.session.query(FideRatingModel).filter(
+            FideRatingModel.rating_type == "rapid").count() == 10
+
+    def test_prune_is_idempotent(self, app):
+        self._seed_scale()
+        first = FideRatingRepository.prune_history(
+            self.CURRENT, "standard", ["IRI"], chunk_size=150)
+        assert first == self.N_GER * len(self.OLD_PERIODS)
+        db.session.commit()
+        second_seen = []
+        second = FideRatingRepository.prune_history(
+            self.CURRENT, "standard", ["IRI"], chunk_size=150,
+            progress_cb=second_seen.append)
+        assert second == 0
+        assert second_seen == []  # nothing left: no chunk, no callback
+        db.session.commit()
+
+    def test_prune_empty_keep_list(self, app):
+        self._seed_scale()
+        before = FideRatingRepository.count()
+        assert FideRatingRepository.prune_history(
+            self.CURRENT, "standard", [], chunk_size=150) == 0
+        assert FideRatingRepository.count() == before
 
 
 class TestPeriodTransition:

@@ -18,6 +18,8 @@ log = logging.getLogger(__name__)
 MIGRATIONS: List[Tuple[str, str]] = [
     ("0001_initial", "migrations.versions.v0001_initial"),
     ("0002_widen_text_columns", "migrations.versions.v0002_widen_text_columns"),
+    ("0003_drop_redundant_rating_index",
+     "migrations.versions.v0003_drop_redundant_rating_index"),
 ]
 
 

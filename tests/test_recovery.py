@@ -548,6 +548,88 @@ class TestDownloaderRecovery:
         verdict = downloader.verify_rating_url("https://x/a.zip")
         assert verdict["ok"] is False and verdict["status"] is None
 
+    def test_declared_length_over_cap_fails_fast(
+            self, tmp_path, monkeypatch):
+        from infrastructure import downloader
+        from domain.errors import FideErrorCategory
+        self._get_with(monkeypatch, _FakeResp(
+            status=200, body=_tiny_zip(),
+            headers={"Content-Length": str(300 * 1024 * 1024)}))
+        dest = str(tmp_path / "d.zip")
+        with pytest.raises(Exception) as exc:
+            downloader.download_fide_zip(
+                "https://x/download/a.zip", dest, max_retries=3,
+                max_bytes=1024)
+        assert exc.value.category == FideErrorCategory.FILE_TOO_LARGE
+        assert not os.path.exists(dest)
+        assert not os.path.exists(dest + ".part")
+
+    def test_streamed_bytes_over_cap_abort_atomically(
+            self, tmp_path, monkeypatch):
+        from infrastructure import downloader
+        from domain.errors import FideErrorCategory
+        # Lying (small) Content-Length must not sneak a big body past:
+        # the streamed count is enforced regardless.
+        body = _tiny_zip()
+        self._get_with(monkeypatch, _FakeResp(
+            status=200, body=body, headers={"Content-Length": "10"}))
+        dest = str(tmp_path / "d.zip")
+        with pytest.raises(Exception) as exc:
+            downloader.download_fide_zip(
+                "https://x/download/a.zip", dest, max_retries=0,
+                max_bytes=len(body) - 1)
+        assert exc.value.category == FideErrorCategory.FILE_TOO_LARGE
+        assert not os.path.exists(dest)
+        assert not os.path.exists(dest + ".part")
+
+    def test_body_at_cap_streams_fine(self, tmp_path, monkeypatch):
+        from infrastructure import downloader
+        body = _tiny_zip()
+        self._get_with(monkeypatch, _FakeResp(
+            status=200, body=body,
+            headers={"Content-Length": str(len(body))}))
+        dest = str(tmp_path / "d.zip")
+        assert downloader.download_fide_zip(
+            "https://x/download/a.zip", dest, max_retries=0,
+            max_bytes=len(body)) == len(body)
+        assert os.path.getsize(dest) == len(body)
+
+    def test_download_ignores_ambient_proxy_env(
+            self, tmp_path, monkeypatch):
+        from infrastructure import downloader
+        seen = {}
+
+        def fake_get(*args, **kwargs):
+            seen.update(kwargs)
+            return _FakeResp(status=200, body=_tiny_zip(),
+                             headers={"Content-Length": "10"})
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+        monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:9")
+        downloader.download_fide_zip(
+            "https://x/download/a.zip", str(tmp_path / "d.zip"),
+            max_retries=0)
+        proxies = seen.get("proxies", {})
+        assert proxies.get("https") is None
+        assert proxies.get("all") is None
+
+    def test_head_probe_ignores_ambient_proxy_env(self, monkeypatch):
+        from infrastructure import downloader
+        seen = {}
+
+        def fake_head(*args, **kwargs):
+            seen.update(kwargs)
+            return _FakeResp(status=404)
+
+        monkeypatch.setattr(requests, "head", fake_head)
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+        monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:9")
+        downloader.verify_rating_url("https://x/a.zip")
+        proxies = seen.get("proxies", {})
+        assert proxies.get("https") is None
+        assert proxies.get("all") is None
+
 
 class TestFilesystemRecovery:
     """Step 10: leftovers are never trusted, never grow, never block."""

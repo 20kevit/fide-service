@@ -321,8 +321,12 @@ def run_claimed_job(job: FideImportJobModel,
                 % (processed, stored))
 
         # ── history scope: keep older periods only for configured feds ──
+        # Prune runs in id-ordered chunks; each chunk heartbeats (which
+        # also commits it), so a large prune can never sit past the
+        # worker stale timeout with a dead heartbeat.
         pruned = FideRatingRepository.prune_history(
-            period, rating_type, cfg.history_federations)
+            period, rating_type, cfg.history_federations,
+            progress_cb=lambda _deleted: _heartbeat(job))
         db.session.commit()
 
         # ── cleanup: delete the consumed archive, sweep old tmp dirs ──
@@ -372,11 +376,16 @@ def _upsert_player(player_data, period: str, rating_type: str) -> bool:
     """
     created = False
     player = FidePlayerRepository.get_by_fide_id(player_data.fide_id)
+    # Federation is the one identity field with read-path semantics
+    # attached (federation filter, history keep-list): normalize once at
+    # the write boundary so "iri"/" IRI " can never slip past the
+    # uppercase comparisons. Names/titles stay verbatim by policy.
+    federation = (player_data.federation or "").strip().upper()
     if player is None:
         player = FidePlayerModel(
             fide_id=player_data.fide_id,
             name=player_data.name,
-            federation=player_data.federation,
+            federation=federation,
             sex=player_data.sex,
             title=player_data.title or "",
             wtitle=player_data.wtitle or "",
@@ -390,7 +399,7 @@ def _upsert_player(player_data, period: str, rating_type: str) -> bool:
     else:
         player.name = player_data.name
         player.sex = player_data.sex
-        player.federation = player_data.federation
+        player.federation = federation
         player.title = player_data.title or ""
         player.wtitle = player_data.wtitle or ""
         player.otitle = player_data.otitle or ""

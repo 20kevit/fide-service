@@ -1,7 +1,8 @@
 """Flask application factory. Own app, own config, own extensions."""
 import logging
+import uuid
 
-from flask import Flask
+from flask import Flask, g
 
 from config import Settings
 from infrastructure.database import db
@@ -26,6 +27,14 @@ def create_app(settings: Settings = None) -> Flask:
     app.config["FIDE_SETTINGS"] = settings
 
     db.init_app(app)
+
+    @app.before_request
+    def _assign_request_id():
+        """One correlation id per request, shared by every log line and
+        the error envelope for that request (see interfaces/api/errors).
+        Generated here so auth rejections (raised before any view runs)
+        carry the same id the client receives."""
+        g.request_id = uuid.uuid4().hex
 
     from infrastructure.database import enable_sqlite_foreign_keys
     with app.app_context():

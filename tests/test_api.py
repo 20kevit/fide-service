@@ -209,6 +209,17 @@ class TestBatch:
                            headers=auth_headers)
         assert resp.status_code == 400
 
+    def test_oversized_body_rejected_before_parsing(
+            self, client, seeded, auth_headers):
+        from interfaces.api.players import BATCH_MAX_BODY_BYTES
+        # 100 valid IDs would be accepted; padding the body past the cap
+        # must fail fast with 400 instead of parsing megabytes of JSON.
+        big = {"ids": ["12512294"], "pad": "x" * BATCH_MAX_BODY_BYTES}
+        resp = client.post("/api/v1/players/batch", json=big,
+                           headers=auth_headers)
+        assert resp.status_code == 400
+        assert resp.get_json()["error"]["code"] == "BAD_REQUEST"
+
 
 class TestStatus:
     def test_status(self, client, seeded, auth_headers):
@@ -326,3 +337,69 @@ class TestEnvelope:
         resp = client.post("/api/v1/status", headers=auth_headers)
         assert resp.status_code == 400
         assert resp.get_json()["error"]["code"] == "BAD_REQUEST"
+
+    def test_request_id_logged_server_side(self, client, caplog):
+        import logging
+        with caplog.at_level(logging.INFO,
+                             logger="interfaces.api.errors"):
+            body = client.get("/api/v1/nope").get_json()["error"]
+        assert body["request_id"]
+        recs = [r for r in caplog.records
+                if body["request_id"] in r.getMessage()]
+        assert recs  # the client-visible id exists server-side
+        assert all("?" not in r.getMessage()  # no query string logged
+                   for r in recs)
+
+    def test_server_error_logged_without_leak(self, client, auth_headers,
+                                              caplog):
+        import logging
+        with caplog.at_level(logging.INFO,
+                             logger="interfaces.api.errors"):
+            body = client.get("/api/v1/players/1",
+                              headers=auth_headers).get_json()["error"]
+        assert body["code"] == "NOT_FOUND"
+        assert body["request_id"] in caplog.text
+        assert "Traceback" not in caplog.text
+
+    def test_auth_rejection_shares_envelope_request_id(self, client, caplog):
+        import logging
+        with caplog.at_level(logging.INFO):
+            body = client.get("/api/v1/status").get_json()["error"]
+        assert body["code"] == "UNAUTHORIZED"
+        rid = body["request_id"]
+        assert rid
+        recs = [r for r in caplog.records if rid in r.getMessage()]
+        # The auth rejection AND the envelope reference the same id,
+        # so a client report is directly greppable server-side.
+        assert len(recs) >= 2
+        assert all("X-API-Key" not in r.getMessage() for r in recs)
+
+
+class TestHealthcheck:
+    def _job(self, state, heartbeat=None, code=None):
+        return {"period": "2026-09", "rating_type": "standard",
+                "state": state, "heartbeat_at": heartbeat,
+                "error_code": code}
+
+    def test_healthy_jobs_no_problems(self):
+        from datetime import datetime, timezone
+        from fide_healthcheck import evaluate_jobs
+        now = datetime.now(timezone.utc)
+        jobs = [self._job("completed"),
+                self._job("importing",
+                           heartbeat=now.isoformat()),
+                self._job("pending")]
+        assert evaluate_jobs(jobs, now, 600) == []
+
+    def test_failed_and_stale_jobs_reported(self):
+        from datetime import datetime, timedelta, timezone
+        from fide_healthcheck import evaluate_jobs
+        now = datetime.now(timezone.utc)
+        old = (now - timedelta(seconds=3600)).isoformat()
+        jobs = [self._job("failed", code="NETWORK_TIMEOUT"),
+                self._job("importing", heartbeat=old),
+                self._job("validating", heartbeat=None)]
+        problems = evaluate_jobs(jobs, now, 600)
+        assert any(p.startswith("FAILED 2026-09/standard NETWORK_TIMEOUT")
+                   for p in problems)
+        assert sum(p.startswith("STALE") for p in problems) == 2

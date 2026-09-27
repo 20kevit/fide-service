@@ -22,6 +22,19 @@ DEFAULT_READ_TIMEOUT = 30
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_BASE = 2.0
 CHUNK_SIZE = 64 * 1024
+#: Hard ceiling for one downloaded archive. Official monthly ZIPs are
+#: ~8-14 MB (largest observed: 14,190,927 bytes); 128 MiB is ~9x headroom
+#: for list growth while bounding disk exhaustion from a compromised or
+#: malfunctioning upstream. Same order as the admin-upload cap.
+DEFAULT_MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024
+
+#: Deterministic direct egress: never inherit ambient HTTP(S)_PROXY /
+#: ALL_PROXY from the process environment. An operator shell (or a global
+#: export) could otherwise route official downloads through an arbitrary
+#: proxy — observed on the production host, where a localhost proxy env
+#: stalls FIDE traffic that succeeds directly. ``all`` must be nulled
+#: too: requests falls back to it when the scheme entries are None.
+_DIRECT_EGRESS = {"http": None, "https": None, "all": None}
 
 #: Permanent refusals — retrying is pointless.
 _PERMANENT_STATUS = {400, 401, 403, 404, 405, 410, 414, 416, 501}
@@ -103,7 +116,7 @@ def verify_rating_url(url: str, timeout: int = 10) -> dict:
         # verify=True is the requests default; stated explicitly so TLS
         # can never be disabled by accident in a future edit.
         resp = requests.head(url, timeout=timeout, allow_redirects=True,
-                             verify=True)
+                             verify=True, proxies=_DIRECT_EGRESS)
         ok = resp.status_code == 200
         length = resp.headers.get("Content-Length", "")
         return {
@@ -163,10 +176,16 @@ def download_fide_zip(url, dest_zip_path,
                       connect_timeout: int = DEFAULT_CONNECT_TIMEOUT,
                       read_timeout: int = DEFAULT_READ_TIMEOUT,
                       max_retries: int = DEFAULT_MAX_RETRIES,
-                      backoff_base: float = DEFAULT_BACKOFF_BASE) -> int:
+                      backoff_base: float = DEFAULT_BACKOFF_BASE,
+                      max_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES) -> int:
     """Stream a ZIP to ``dest_zip_path`` atomically (.part + replace).
 
     Returns the final size in bytes. Retries transient failures only.
+    ``max_bytes`` bounds the response twice: a declared Content-Length
+    above it fails fast before streaming, and the streamed byte count is
+    enforced regardless (a lying or missing length cannot sneak a huge
+    file past). Oversize is permanent: never retried, ``.part`` dropped,
+    never renamed into place.
     """
     os.makedirs(os.path.dirname(dest_zip_path) or ".", exist_ok=True)
     if not source_is_secure(url):
@@ -179,8 +198,9 @@ def download_fide_zip(url, dest_zip_path,
     while True:
         try:
             with requests.get(url, stream=True,
-                              timeout=(connect_timeout, read_timeout),
-                              verify=True) as resp:
+                               timeout=(connect_timeout, read_timeout),
+                               verify=True,
+                               proxies=_DIRECT_EGRESS) as resp:
                 if resp.status_code == 429:
                     raise FideError(
                         FideErrorCategory.HTTP_RATE_LIMIT, stage="download",
@@ -193,6 +213,11 @@ def download_fide_zip(url, dest_zip_path,
                 resp.raise_for_status()
                 total = resp.headers.get("Content-Length")
                 total = int(total) if total and total.isdigit() else None
+                if total is not None and total > max_bytes:
+                    raise FideError(
+                        FideErrorCategory.FILE_TOO_LARGE, stage="download",
+                        detail="Official archive declares %d bytes; limit "
+                               "is %d bytes." % (total, max_bytes))
                 downloaded = 0
                 with open(tmp_path, "wb") as fh:
                     for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
@@ -200,6 +225,12 @@ def download_fide_zip(url, dest_zip_path,
                             continue
                         fh.write(chunk)
                         downloaded += len(chunk)
+                        if downloaded > max_bytes:
+                            raise FideError(
+                                FideErrorCategory.FILE_TOO_LARGE,
+                                stage="download",
+                                detail="Download exceeded %d bytes; "
+                                       "aborted." % max_bytes)
                         if progress_cb and total:
                             progress_cb(downloaded / total)
                 head = open(tmp_path, "rb").read(4)

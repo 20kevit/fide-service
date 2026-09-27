@@ -1,7 +1,13 @@
 """Shared pytest fixtures: isolated app + temp SQLite + temp data dir."""
 import os
+import sys
 
 import pytest
+
+# Operational scripts (e.g. the healthcheck) are importable so their pure
+# logic is unit-testable without HTTP.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
 from config import Settings
 from infrastructure import migrations

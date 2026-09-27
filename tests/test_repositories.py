@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from infrastructure.database import db
@@ -10,6 +11,22 @@ from infrastructure.repositories import (
     FideImportJobRepository, FidePlayerRepository, FideRatingRepository,
 )
 from tests.conftest import seed_player, seed_rating
+
+
+class TestSchemaMetadata:
+    def test_no_redundant_fide_id_index_on_fresh_schema(self, app):
+        # ORM metadata must not declare the single-column index dropped
+        # by migration 0003: both composites lead with fide_id.
+        rows = db.session.execute(text(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'ix_fide_ratings_fide_id'")).all()
+        assert rows == []
+        names = {r[0] for r in db.session.execute(text(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND tbl_name = 'fide_ratings'")).all()}
+        # Composites survive (the UQ itself materializes as a SQLite
+        # autoindex); only the redundant single-column one must be gone.
+        assert {"ix_fide_ratings_lookup", "ix_fide_ratings_period"} <= names
 
 
 class TestPlayerRepository:

@@ -166,13 +166,16 @@ def _reject(code: str, message: str, event: str, presented: str) -> None:
     """Log a safe rejection record, then raise the public error.
 
     Never logs credentials, query strings, or headers — only the event,
-    peer IP, key fingerprint, sanitized path, and status.
+    peer IP, key fingerprint, sanitized path, status, and the shared
+    per-request id (assigned in the app factory; the error envelope the
+    client receives carries this same id).
     """
     tripped = _record_auth_failure()
     log.warning("auth rejected event=%s ip=%s key_fp=%s path=%s "
-                "status=%d over_budget=%s",
+                "status=%d over_budget=%s request_id=%s",
                 event, _client_ip(), _key_fingerprint(presented),
-                _safe_path(), CODE_STATUS[code], tripped)
+                _safe_path(), CODE_STATUS[code], tripped,
+                getattr(g, "request_id", "-"))
     raise ApiError(code, message)
 
 
